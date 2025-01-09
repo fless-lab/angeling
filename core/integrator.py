@@ -2,12 +2,12 @@ import logging
 from typing import Optional, Dict, Any
 from core.resilience import ResilienceManager, ErrorCategory, ErrorSeverity
 from core.brain import BehaviorAnalyzer
-from core.stealth import StealthManager
+from core.stealth import StealthMechanism as StealthManager
 from core.obfuscator import CodeObfuscator
 from modules.router import CommandRouter
-from modules.network import NetworkManager
-from modules.collector import DataCollector
-from modules.persistence import PersistenceManager
+from modules.network import NetworkOperations as NetworkManager
+from modules.collector import Collector as DataCollector
+from modules.persistence import Persistence as PersistenceManager
 
 class SystemIntegrator:
     """Intégrateur central pour tous les composants du framework"""

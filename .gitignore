@@ -1,0 +1,76 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.project
+.pydevproject
+
+# Logs et bases de données
+*.log
+*.sqlite3
+*.db
+logs/
+backups/
+
+# Fichiers temporaires
+temp/
+tmp/
+*.tmp
+*.bak
+*.swp
+*~
+
+# Fichiers de build
+build/
+dist/
+output/
+*.exe
+*.dll
+*.pyd
+*.bin
+
+# Fichiers de test
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+nosetests.xml
+coverage.xml
+
+# Fichiers spécifiques au projet
+config/local_settings.py
+*.key
+*.pem
+*.crt
+*.cer
+*.der
+*.pfx
+*.p12
