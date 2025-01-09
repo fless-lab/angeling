@@ -17,6 +17,8 @@ from stem import Signal
 from stem.control import Controller
 import time
 import base64
+import json
+import hashlib
 
 class I2PConnector:
     def __init__(self):
@@ -477,4 +479,55 @@ class NetworkOperations:
                 
             return True
         except:
+            return False
+            
+    def _send_p2p(self, target_id: str, data: bytes) -> bool:
+        """Send data over P2P connection using BitTorrent-like protocol"""
+        try:
+            # Initialize P2P connection
+            peer_info = self.nodes[target_id].connections.get('p2p', {})
+            if not peer_info:
+                return False
+                
+            # Split data into chunks for efficient transfer
+            chunk_size = 1024 * 16  # 16KB chunks
+            chunks = [data[i:i+chunk_size] for i in range(0, len(data), chunk_size)]
+            
+            # Create transfer manifest
+            manifest = {
+                'chunks': len(chunks),
+                'chunk_size': chunk_size,
+                'total_size': len(data),
+                'checksum': hashlib.sha256(data).hexdigest()
+            }
+            
+            # Establish direct connection
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10)
+            
+            try:
+                sock.connect((peer_info['ip'], peer_info['port']))
+                
+                # Send manifest
+                sock.send(json.dumps(manifest).encode())
+                if not sock.recv(2) == b'ok':
+                    return False
+                    
+                # Send chunks with verification
+                for chunk in chunks:
+                    chunk_hash = hashlib.sha256(chunk).hexdigest()
+                    header = f"{len(chunk)}:{chunk_hash}".encode()
+                    sock.send(header + b'\n' + chunk)
+                    
+                    # Wait for chunk acknowledgment
+                    if not sock.recv(2) == b'ok':
+                        return False
+                        
+                return True
+                
+            finally:
+                sock.close()
+                
+        except Exception as e:
+            self.logger.error(f"P2P transfer failed: {str(e)}")
             return False
