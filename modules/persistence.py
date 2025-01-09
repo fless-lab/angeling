@@ -405,3 +405,30 @@ WantedBy=multi-user.target
                 self.logger.error(f"Method {method.__name__} failed: {str(e)}")
                 
         return self.verify_persistence()
+
+    def handle_filesystem_error(self, error_info: Dict):
+        """Gère les erreurs système de fichiers avec résilience"""
+        try:
+            # Vérifie et répare les permissions
+            self._check_and_repair_permissions()
+            
+            # Nettoie les fichiers temporaires
+            self._cleanup_temp_files()
+            
+            # Vérifie l'intégrité des fichiers critiques
+            self._verify_critical_files()
+            
+        except Exception as e:
+            self.logger.error(f"Filesystem error recovery failed: {str(e)}")
+
+    def _check_and_repair_permissions(self):
+        # Code pour vérifier et réparer les permissions
+        pass
+
+    def _cleanup_temp_files(self):
+        # Code pour nettoyer les fichiers temporaires
+        pass
+
+    def _verify_critical_files(self):
+        # Code pour vérifier l'intégrité des fichiers critiques
+        pass

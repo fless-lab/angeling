@@ -531,3 +531,18 @@ class NetworkOperations:
         except Exception as e:
             self.logger.error(f"P2P transfer failed: {str(e)}")
             return False
+            
+    def handle_network_error(self, error_info: Dict):
+        """Gère les erreurs réseau avec résilience"""
+        try:
+            # Réinitialise les connexions
+            self._reset_connections()
+            
+            # Attend avant de réessayer
+            time.sleep(random.uniform(1, 5))
+            
+            # Tente de rétablir la connexion
+            self._reestablish_connection()
+            
+        except Exception as e:
+            self.logger.error(f"Network error recovery failed: {str(e)}")

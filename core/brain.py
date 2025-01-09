@@ -426,3 +426,37 @@ class AngelBrain:
         self.active = False
         if hasattr(self, 'monitor_thread'):
             self.monitor_thread.join()
+            
+    def handle_process_error(self, error_info: Dict):
+        """Gère les erreurs de processus avec résilience"""
+        try:
+            # Sauvegarde l'état actuel
+            self._save_state()
+            
+            # Nettoie les ressources
+            self._cleanup_resources()
+            
+            # Réinitialise les analyseurs
+            self._reset_analyzers()
+            
+            # Restaure l'état précédent
+            self._restore_state()
+            
+        except Exception as e:
+            self.logger.error(f"Process error recovery failed: {str(e)}")
+            
+    def _save_state(self):
+        # Sauvegarde l'état actuel
+        pass
+        
+    def _cleanup_resources(self):
+        # Nettoie les ressources
+        pass
+        
+    def _reset_analyzers(self):
+        # Réinitialise les analyseurs
+        pass
+        
+    def _restore_state(self):
+        # Restaure l'état précédent
+        pass
