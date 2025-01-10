@@ -1,7 +1,9 @@
-pycryptodome>=3.15.0
+requests>=2.28.1
 psutil>=5.9.0
 dnspython>=2.2.1
-requests>=2.28.1
+pycryptodome>=3.15.0
+pywin32>=305
+winregistry>=0.8.0
 astor>=0.8.1
 pytest>=7.0.0
 pytest-cov>=4.0.0

